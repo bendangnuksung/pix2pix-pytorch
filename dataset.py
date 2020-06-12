@@ -77,7 +77,7 @@ class DatasetFromImages(data.Dataset):
         final_images = []
         for image in images:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(image)
+            image = Image.fromarray(image).convert('RGB')
             final_images.append(image)
         return final_images
 
