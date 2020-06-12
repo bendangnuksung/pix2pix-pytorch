@@ -77,7 +77,8 @@ def train_from_images(A_images, B_images, A_test_images=None, B_test_images=None
     device = set_device(config)
     set_seed(config)
     cudnn.benchmark = True
-    train_set = DatasetFromImages(A_images, B_images, config.direction, is_cv2_image, config.input_shape)
+    train_set = DatasetFromImages(A_images, B_images, config.direction, is_cv2_image, config.input_shape,
+                                  config.input_nc, config.output_nc)
     training_data_loader = DataLoader(dataset=train_set, num_workers=config.threads, batch_size=config.batch_size,
                                       shuffle=True)
 
@@ -180,7 +181,7 @@ def train_from_images(A_images, B_images, A_test_images=None, B_test_images=None
 
 if __name__ == '__main__':
     from PIL import Image
-
+    import cv2
     train_a = 'dataset/facades/train/a'
     train_b = 'dataset/facades/train/b'
     filenames = os.listdir(train_a)
@@ -191,8 +192,10 @@ if __name__ == '__main__':
     for file in filenames:
         a = os.path.join(train_a, file)
         b = os.path.join(train_b, file)
-        a_im = Image.open(a).convert('RGB')
-        b_im = Image.open(b).convert('RGB')
+        # a_im = Image.open(a).convert('RGB')
+        # b_im = Image.open(b).convert('RGB')
+        a_im = cv2.imread(a)
+        b_im = cv2.imread(b, 0)
         train_a_images.append(a_im)
         train_b_images.append(b_im)
 
@@ -200,5 +203,7 @@ if __name__ == '__main__':
     config.input_shape = 512
     config.cuda_n = 0
     config.batch_size = 2
+    config.input_nc = 1
+    print(train_b_images[0].shape)
 
-    train_from_images(train_a_images, train_b_images, model_ckpt_path='myckpt', config=config)
+    train_from_images(train_a_images, train_b_images, model_ckpt_path='myckpt', config=config, is_cv2_image=True)

@@ -60,11 +60,18 @@ class DatasetFromFolder(data.Dataset):
 
 
 class DatasetFromImages(data.Dataset):
-    def __init__(self, A_images, B_images, direction, is_cv2_image=False, input_shape=256):
+    def __init__(self, A_images, B_images, direction, is_cv2_image=False, input_shape=256, input_nc=3, output_nc=3):
         super(DatasetFromImages, self).__init__()
         self.direction = direction
-        self.A_images = A_images if not is_cv2_image else self.cvt_to_pil(A_images)
-        self.B_images = B_images if not is_cv2_image else self.cvt_to_pil(B_images)
+        if direction == 'b2a':
+            self.a_nc = output_nc
+            self.b_nc = input_nc
+        else:
+            self.a_nc = input_nc
+            self.b_nc = output_nc
+
+        self.A_images = A_images if not is_cv2_image else self.cvt_to_pil(A_images, self.a_nc)
+        self.B_images = B_images if not is_cv2_image else self.cvt_to_pil(B_images, self.b_nc)
 
         transform_list = [transforms.ToTensor(),
                           transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
@@ -73,11 +80,14 @@ class DatasetFromImages(data.Dataset):
         self.input_shape = input_shape
         self.input_shape_pad = int(self.input_shape * 1.1171875) # if input shape = 256 then input_shape_pad = 256 + 30
 
-    def cvt_to_pil(self, images):
+    def cvt_to_pil(self, images, nc):
         final_images = []
         for image in images:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(image).convert('RGB')
+            if nc == 3:
+                image = Image.fromarray(image).convert('RGB')
+            else:
+                image = Image.fromarray(image).convert('L')
             final_images.append(image)
         return final_images
 
@@ -93,9 +103,16 @@ class DatasetFromImages(data.Dataset):
     
         a = a[:, h_offset:h_offset + self.input_shape, w_offset:w_offset + self.input_shape]
         b = b[:, h_offset:h_offset + self.input_shape, w_offset:w_offset + self.input_shape]
-    
-        a = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(a)
-        b = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(b)
+
+        if self.a_nc == 3:
+            a = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(a)
+        else:
+            a = transforms.Normalize((0.5, ), (0.5, ))(a)
+
+        if self.b_nc == 3:
+            b = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(b)
+        else:
+            b = transforms.Normalize((0.5, ), (0.5, ))(b)
 
         if random.random() < 0.5:
             idx = [i for i in range(a.size(2) - 1, -1, -1)]
