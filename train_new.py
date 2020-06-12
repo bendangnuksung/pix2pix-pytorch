@@ -14,7 +14,6 @@ from dataset import DatasetFromImages
 class MyConfig():
 
     def __init__(self):
-        self.dataset = 'facades'  # default dataset
         self.batch_size = 1  # 'training batch size'
         self.test_batch_size = 1  # testing batch size
         self.direction = 'b2a'  # a2b or b2a
@@ -47,7 +46,6 @@ default_config = MyConfig()
 
 
 def set_device(config):
-    map_location = 'cpu'
     if not torch.cuda.is_available():
         raise Exception("No GPU found, set config.cuda=False to use CPU")
 
@@ -177,12 +175,11 @@ def train_from_images(A_images, B_images, A_test_images=None, B_test_images=None
             net_d_model_out_path = f"{model_ckpt_path}/netD_model_epoch_{epoch}.pth"
             torch.save(net_g, net_g_model_out_path)
             torch.save(net_d, net_d_model_out_path)
-            print("Checkpoint saved to -- ", config.dataset)
+            print("Checkpoint saved to -- ", model_ckpt_path)
 
 
 if __name__ == '__main__':
     from PIL import Image
-    from train import train_from_images, MyConfig
 
     train_a = 'dataset/facades/train/a'
     train_b = 'dataset/facades/train/b'
@@ -201,7 +198,7 @@ if __name__ == '__main__':
 
     config = MyConfig()
     config.input_shape = 512
-    config.cuda_n = 1
+    config.cuda_n = 0
     config.batch_size = 2
 
     train_from_images(train_a_images, train_b_images, model_ckpt_path='myckpt', config=config)
