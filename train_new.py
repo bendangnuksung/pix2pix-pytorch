@@ -194,8 +194,8 @@ if __name__ == '__main__':
     for file in filenames:
         a = os.path.join(train_a, file)
         b = os.path.join(train_b, file)
-        a_im = Image.open(a)
-        b_im = Image.open(b)
+        a_im = Image.open(a).convert('RGB')
+        b_im = Image.open(b).convert('RGB')
         train_a_images.append(a_im)
         train_b_images.append(b_im)
 
