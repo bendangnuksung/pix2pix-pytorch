@@ -1,6 +1,7 @@
 from os import listdir
 from os.path import join
 import random
+import cv2
 
 from PIL import Image
 import torch
@@ -72,7 +73,6 @@ class DatasetFromImages(data.Dataset):
         self.input_shape = input_shape
         self.input_shape_pad = int(self.input_shape * 1.1171875) # if input shape = 256 then input_shape_pad = 256 + 30
 
-
     def cvt_to_pil(self, images):
         final_images = []
         for image in images:
@@ -80,7 +80,6 @@ class DatasetFromImages(data.Dataset):
             image = Image.fromarray(image)
             final_images.append(image)
         return final_images
-
 
     def __getitem__(self, index):
         a = self.A_images[index]
