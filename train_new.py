@@ -80,7 +80,7 @@ class Pix2Pix():
 
 
     def set_seed(self):
-        torch.manual_seed(config.seed)
+        torch.manual_seed(self.config.seed)
         if self.config.cuda:
             torch.cuda.manual_seed(self.config.seed)
 
