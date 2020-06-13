@@ -1,6 +1,12 @@
 import os
 from math import log10
+import cv2
+import random
+from PIL import Image
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,6 +15,7 @@ import torch.backends.cudnn as cudnn
 
 from networks import define_G, define_D, GANLoss, get_scheduler, update_learning_rate
 from dataset import DatasetFromImages
+import torchvision.transforms as transforms
 
 
 class MyConfig():
@@ -34,6 +41,9 @@ class MyConfig():
         self.cuda = True  # use cuda?
         self.cuda_n = 0  # for multiple gpu
         self.input_shape = 256  # input shape width=height=256
+        self.checkpoint_step = 1 # checkpoint after every N step
+        self.checkpoint_path = 'checkpoint/' # checkpoint model
+        self.test_image_path = 'result/' # prediction image save path
 
     def display(self):
         print("************************** Given config **************************")
@@ -45,145 +55,307 @@ class MyConfig():
 default_config = MyConfig()
 
 
-def set_device(config):
-    if not torch.cuda.is_available():
-        raise Exception("No GPU found, set config.cuda=False to use CPU")
+class Pix2Pix():
 
-    if config.cuda:
-        device = torch.device('cuda:' + str(config.cuda_n))
-    else:
-        device = torch.device('cpu')
-    return device
-
-
-def set_seed(config):
-    torch.manual_seed(config.seed)
-    if config.cuda:
-        torch.cuda.manual_seed(config.seed)
+    def __init__(self, config=default_config):
+        self.config = config
+        self.net_g = None
+        transform_list_rgb = [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+        transform_list_gray = [transforms.ToTensor(), transforms.Normalize((0.5, ), (0.5, ))]
+        self.transform_rgb = transforms.Compose(transform_list_rgb)
+        self.transform_gray = transforms.Compose(transform_list_gray)
+        self.save_image_counter = 0
+        self.config.display()
 
 
-def train_from_images(A_images, B_images, A_test_images=None, B_test_images=None, is_cv2_image=False,
-                      model_ckpt_path='checkpoint/', config=default_config):
-    """
-    :param A_images: List of A Training images (type can be PIL object or numpy)
-    :param B_images: List of B Training images (type can be PIL object or numpy)
-    :param A_test_images: List of A Testing images (type can be PIL object or numpy) (optional)
-    :param B_test_images: List of B Tetsting images (type can be PIL object or numpy) (optional)
-    :param is_cv2_image: Set True if image is read in Numpy Cv2 format, else False if read by PIL
-    :param model_ckpt_path: Checkpoint model path to be save
-    :param config:  Hyperparameter from config
-    """
-    config.display()
-    device = set_device(config)
-    set_seed(config)
-    cudnn.benchmark = True
-    train_set = DatasetFromImages(A_images, B_images, config.direction, is_cv2_image, config.input_shape,
-                                  config.input_nc, config.output_nc)
-    training_data_loader = DataLoader(dataset=train_set, num_workers=config.threads, batch_size=config.batch_size,
-                                      shuffle=True)
+    def set_device(self):
+        if not torch.cuda.is_available():
+            raise Exception("No GPU found, set config.cuda=False to use CPU")
 
-    test_set, testing_data_loader = None, None
-    if A_test_images is not None:
-        test_set = DatasetFromImages(A_test_images, B_test_images, config.direction, is_cv2_image, config.input_shape)
-        testing_data_loader = DataLoader(dataset=test_set, num_workers=config.threads,
-                                         batch_size=config.test_batch_size, shuffle=False)
+        if self.config.cuda:
+            device = torch.device('cuda:' + str(self.config.cuda_n))
+        else:
+            device = torch.device('cpu')
+        return device
 
-    net_g = define_G(config.input_nc, config.output_nc, config.ngf, 'batch', False, 'normal', 0.02, gpu_id=device)
-    net_d = define_D(config.input_nc + config.output_nc, config.ndf, 'basic', gpu_id=device)
 
-    criterionGAN = GANLoss().to(device)
-    criterionL1 = nn.L1Loss().to(device)
-    criterionMSE = nn.MSELoss().to(device)
+    def set_seed(self):
+        torch.manual_seed(config.seed)
+        if self.config.cuda:
+            torch.cuda.manual_seed(self.config.seed)
 
-    optimizer_g = optim.Adam(net_g.parameters(), lr=config.lr, betas=(config.beta1, 0.999))
-    optimizer_d = optim.Adam(net_d.parameters(), lr=config.lr, betas=(config.beta1, 0.999))
-    net_g_scheduler = get_scheduler(optimizer_g, config)
-    net_d_scheduler = get_scheduler(optimizer_d, config)
+    def get_models(self, ckpt_path, load_only_gen=False):
+        print("#"*40)
+        print("Loading Models")
+        models = os.listdir(ckpt_path)
+        if len(models) == 0:
+            print("No models found in Checkpoint path:")
+            return False
 
-    for epoch in range(config.epoch_count, config.niter + config.niter_decay + 1):
-        # train
-        for iteration, batch in enumerate(training_data_loader, 1):
-            # forward
-            real_a, real_b = batch[0].to(device), batch[1].to(device)
+        gen_model = None
+        dis_model = None
+        gen_model_dict = {}
+        dis_model_dict = {}
 
-            fake_b = net_g(real_a)
-            ######################
-            # (1) Update D network
-            ######################
-            optimizer_d.zero_grad()
+        for model_name in models:
+            try:
+                # model_name = model_name.replace('.pth', '.bin')
+                path = os.path.join(ckpt_path, model_name)
+                bin_path = path.replace('.pth', '.bin')
+                model_path = bin_path if os.path.exists(bin_path) else path
+                temp = model_name.split('_')
+                epoch = temp[-1].split('.')[0]
+                is_gen = model_name.startswith('netG')
+                if is_gen:
+                    gen_model_dict[int(epoch)] = model_path
+                else:
+                    dis_model_dict[int(epoch)] = model_path
+            except:
+                print('Not a model file: ', model_name)
 
-            # train with fake
-            fake_ab = torch.cat((real_a, fake_b), 1)
-            pred_fake = net_d.forward(fake_ab.detach())
-            loss_d_fake = criterionGAN(pred_fake, False)
+        if gen_model_dict == {}:
+            print("No Generator model found")
+            return False
 
-            # train with real
-            real_ab = torch.cat((real_a, real_b), 1)
-            pred_real = net_d.forward(real_ab)
-            loss_d_real = criterionGAN(pred_real, True)
+        if dis_model_dict == {}:
+            print("No Discriminator model found")
+            return False
 
-            # Combined D loss
-            loss_d = (loss_d_fake + loss_d_real) * 0.5
+        highest_epoch = sorted(gen_model_dict.keys())[-1]
 
-            loss_d.backward()
+        self.config.epoch_count = highest_epoch
 
-            optimizer_d.step()
 
-            ######################
-            # (2) Update G network
-            ######################
+        gen_model_path = gen_model_dict[highest_epoch]
+        dis_model_path = dis_model_dict[highest_epoch]
 
-            optimizer_g.zero_grad()
+        if gen_model_path.endswith('bin'):
+            net_g_state_dict = torch.load(gen_model_path)
+            self.net_g.load_state_dict(net_g_state_dict)
+            if not load_only_gen:
+                net_d_state_dict = torch.load(dis_model_path)
+                self.net_d.load_state_dict(net_d_state_dict)
+        else:
+            self.net_g = torch.load(gen_model_path)
+            if not load_only_gen:
+                self.net_d = torch.load(dis_model_path)
 
-            # First, G(A) should fake the discriminator
-            fake_ab = torch.cat((real_a, fake_b), 1)
-            pred_fake = net_d.forward(fake_ab)
-            loss_g_gan = criterionGAN(pred_fake, True)
+        print(f"Loaded Generator:     {gen_model_path}")
+        if not load_only_gen:
+            print(f"Loaded Discriminator: {dis_model_path}")
+        print("#"*40)
+        return True
 
-            # Second, G(A) = B
-            loss_g_l1 = criterionL1(fake_b, real_b) * config.lamb
 
-            loss_g = loss_g_gan + loss_g_l1
+    def train_from_images(self, A_images, B_images, A_test_images=None, B_test_images=None, is_cv2_image=False,
+                          load_last_model=True):
+        """
+        :param A_images: List of A Training images (type can be PIL object or numpy)
+        :param B_images: List of B Training images (type can be PIL object or numpy)
+        :param A_test_images: List of A Testing images (type can be PIL object or numpy) (optional)
+        :param B_test_images: List of B Tetsting images (type can be PIL object or numpy) (optional)
+        :param is_cv2_image: Set True if image is read in Numpy Cv2 format, else False if read by PIL
+        :param self.model_ckpt_path: Checkpoint model path to be save
+        :param config:  Hyperparameter from config
+        """
+        
+        self.device = self.set_device()
+        self.set_seed()
+        self.model_ckpt_path = self.config.checkpoint_path
+        cudnn.benchmark = True
+        train_set = DatasetFromImages(A_images, B_images, self.config.direction, is_cv2_image, self.config.input_shape,
+                                      self.config.input_nc, self.config.output_nc)
+        training_data_loader = DataLoader(dataset=train_set, num_workers=self.config.threads, batch_size=self.config.batch_size,
+                                          shuffle=True)
 
-            loss_g.backward()
+        test_set, testing_data_loader = None, None
+        test_image_exist = False if A_test_images is None else True
+        if A_test_images is not None:
+            test_set = DatasetFromImages(A_test_images, B_test_images, self.config.direction, is_cv2_image, self.config.input_shape)
+            testing_data_loader = DataLoader(dataset=test_set, num_workers=self.config.threads,
+                                             batch_size=self.config.test_batch_size, shuffle=False)
 
-            optimizer_g.step()
+        self.net_g = define_G(self.config.input_nc, self.config.output_nc, self.config.ngf, 'batch', False, 'normal', 0.02, gpu_id=self.device)
+        self.net_d = define_D(self.config.input_nc + self.config.output_nc, self.config.ndf, 'basic', gpu_id=self.device)
+        if load_last_model:
+            self.get_models(self.model_ckpt_path)
 
-            if iteration % 25 == 0:
-                print("===> Epoch[{}]({}/{}): Loss_D: {:.4f} Loss_G: {:.4f}".format(
-                    epoch, iteration, len(training_data_loader), loss_d.item(), loss_g.item()))
+        criterionGAN = GANLoss().to(self.device)
+        criterionL1 = nn.L1Loss().to(self.device)
+        criterionMSE = nn.MSELoss().to(self.device)
 
-        update_learning_rate(net_g_scheduler, optimizer_g)
-        update_learning_rate(net_d_scheduler, optimizer_d)
+        optimizer_g = optim.Adam(self.net_g.parameters(), lr=self.config.lr, betas=(self.config.beta1, 0.999))
+        optimizer_d = optim.Adam(self.net_d.parameters(), lr=self.config.lr, betas=(self.config.beta1, 0.999))
+        net_g_scheduler = get_scheduler(optimizer_g, self.config)
+        net_d_scheduler = get_scheduler(optimizer_d, self.config)
+        total_epoch =  self.config.niter + self.config.niter_decay + 1
+        for epoch in range(self.config.epoch_count, total_epoch):
+            # train
+            for iteration, batch in enumerate(training_data_loader, 1):
+                self.net_g.train()
+                self.net_d.train()
+                # forward
+                real_a, real_b = batch[0].to(self.device), batch[1].to(self.device)
 
-        # test
-        if testing_data_loader is not None:
-            avg_psnr = 0
-            for batch in testing_data_loader:
-                input, target = batch[0].to(device), batch[1].to(device)
+                fake_b = self.net_g(real_a)
+                ######################
+                # (1) Update D network
+                ######################
+                optimizer_d.zero_grad()
 
-                prediction = net_g(input)
-                mse = criterionMSE(prediction, target)
-                psnr = 10 * log10(1 / mse.item())
-                avg_psnr += psnr
-            print("===> Avg. PSNR: {:.4f} dB".format(avg_psnr / len(testing_data_loader)))
+                # train with fake
+                fake_ab = torch.cat((real_a, fake_b), 1)
+                pred_fake = self.net_d.forward(fake_ab.detach())
+                loss_d_fake = criterionGAN(pred_fake, False)
 
-        # checkpoint
-        if epoch % 50 == 0:
-            if not os.path.exists(model_ckpt_path):
-                os.mkdir(model_ckpt_path)
-            net_g_model_out_path = f"{model_ckpt_path}/netG_model_epoch_{epoch}.pth"
-            net_d_model_out_path = f"{model_ckpt_path}/netD_model_epoch_{epoch}.pth"
-            torch.save(net_g, net_g_model_out_path)
-            torch.save(net_d, net_d_model_out_path)
-            print("Checkpoint saved to -- ", model_ckpt_path)
+                # train with real
+                real_ab = torch.cat((real_a, real_b), 1)
+                pred_real = self.net_d.forward(real_ab)
+                loss_d_real = criterionGAN(pred_real, True)
+
+                # Combined D loss
+                loss_d = (loss_d_fake + loss_d_real) * 0.5
+
+                loss_d.backward()
+
+                optimizer_d.step()
+
+                ######################
+                # (2) Update G network
+                ######################
+
+                optimizer_g.zero_grad()
+
+                # First, G(A) should fake the discriminator
+                fake_ab = torch.cat((real_a, fake_b), 1)
+                pred_fake = self.net_d.forward(fake_ab)
+                loss_g_gan = criterionGAN(pred_fake, True)
+
+                # Second, G(A) = B
+                loss_g_l1 = criterionL1(fake_b, real_b) * self.config.lamb
+
+                loss_g = loss_g_gan + loss_g_l1
+
+                loss_g.backward()
+
+                optimizer_g.step()
+
+                if iteration % 25 == 0:
+                    print("===> Epoch[{}/{}] Steps:({}/{}): Loss_D: {:.4f} Loss_G: {:.4f}".format(
+                        epoch, total_epoch, iteration, len(training_data_loader), loss_d.item(), loss_g.item()))
+
+            update_learning_rate(net_g_scheduler, optimizer_g)
+            update_learning_rate(net_d_scheduler, optimizer_d)
+
+            # test
+            if testing_data_loader is not None:
+                avg_psnr = 0
+                for batch in testing_data_loader:
+                    input, target = batch[0].to(self.device), batch[1].to(self.device)
+
+                    prediction = self.net_g(input)
+                    mse = criterionMSE(prediction, target)
+                    psnr = 10 * log10(1 / mse.item())
+                    avg_psnr += psnr
+                print("===> Avg. PSNR: {:.4f} dB".format(avg_psnr / len(testing_data_loader)))
+
+            # checkpoint
+            if epoch % self.config.checkpoint_step == 0:
+                if not os.path.exists(self.model_ckpt_path):
+                    os.mkdir(self.model_ckpt_path)
+                self.net_g.eval()
+                self.net_d.eval()
+                net_g_model_out_path = f"{self.model_ckpt_path}/netG_model_epoch_{epoch}.pth"
+                net_d_model_out_path = f"{self.model_ckpt_path}/netD_model_epoch_{epoch}.pth"
+                # torch.save(self.net_g.state_dict(), net_g_model_out_path.replace('.pth', '.bin'))
+                # torch.save(self.net_d.state_dict(), net_d_model_out_path.replace('.pth', '.bin'))
+                torch.save(self.net_g, net_g_model_out_path)
+                torch.save(self.net_d, net_d_model_out_path)
+                print("Checkpoint saved to -- ", self.model_ckpt_path)
+
+                # prediction
+                if self.config.direction == 'b2a':
+                    if test_image_exist:
+                        image = random.choice(B_test_images)
+                    else:
+                        image = random.choice(B_images)
+
+                else:
+                    if test_image_exist:
+                        image = random.choice(A_test_images)
+                    else:
+                        image = random.choice(A_images)
+
+                self.predict([image], is_cv2_image=True)
+
+        
+        print("Completed")
+
+
+    def process_image(self, images, is_cv2_image):
+        final_images = []
+                  
+        for image in images:
+            if is_cv2_image:                
+                if self.config.input_nc == 3:
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                    image = Image.fromarray(image).convert('RGB')
+                else:
+                    image = Image.fromarray(image).convert('L')
+            image.resize((self.config.input_shape, self.config.input_shape), Image.BICUBIC)
+
+            if self.config.input_nc == 3:
+                image = self.transform_rgb(image)
+            else:
+                image = self.transform_gray(image)
+
+            final_images.append(image)
+
+        return final_images
+
+
+    def save_img(self, image_tensor, filename):
+        image_numpy = image_tensor.float().numpy()
+        image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
+        image_numpy = image_numpy.clip(0, 255)
+        image_numpy = image_numpy.astype(np.uint8)
+        image_pil = Image.fromarray(image_numpy)
+        image_pil.save(filename)
+        print("Image saved as {}".format(filename))
+        
+
+    def predict(self, images, save_image_dir_path=None, model_ckpt_path=None, is_cv2_image=False):
+        if save_image_dir_path is None:
+            save_image_dir_path = self.config.test_image_path
+        if model_ckpt_path is None:
+            model_ckpt_path = self.config.checkpoint_path
+
+        self.device = self.set_device()
+        self.set_seed()
+        if self.net_g is None:
+            self.get_models(model_ckpt_path, load_only_gen=True)
+        self.net_g.eval()
+
+        images = self.process_image(images, is_cv2_image)
+        for image in images:
+            input_image = image.unsqueeze(0).to(self.device)
+            out = self.net_g(input_image)
+            out_img = out.detach().squeeze(0).cpu()
+            self.save_image_counter += 1
+            file_path = os.path.join(save_image_dir_path, 'predict_image_' + str(self.save_image_counter) +'.jpg')
+            self.save_img(out_img, file_path)
+
+
+    def __del__(self):  
+        print("Destructor called, object deleted.")
+
 
 
 if __name__ == '__main__':
     from PIL import Image
     import cv2
-    train_a = 'dataset/facades/train/a'
-    train_b = 'dataset/facades/train/b'
+    train_a = 'mask_sample/a'
+    train_b = 'mask_sample/b'
     filenames = os.listdir(train_a)
 
     train_a_images = []
@@ -201,9 +373,15 @@ if __name__ == '__main__':
 
     config = MyConfig()
     config.input_shape = 512
-    config.cuda_n = 0
-    config.batch_size = 2
+    config.cuda_n = 1
+    config.batch_size = 1
     config.input_nc = 1
+    config.checkpoint_path = 'mask_ckpt/'
+    config.test_image_path = 'result/'
     print(train_b_images[0].shape)
 
-    train_from_images(train_a_images, train_b_images, model_ckpt_path='myckpt', config=config, is_cv2_image=True)
+    pix2pix = Pix2Pix(config)
+
+
+    pix2pix.train_from_images(train_a_images, train_b_images, is_cv2_image=True)
+    # pix2pix.predict(train_b_images, is_cv2_image=True)

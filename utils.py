@@ -7,8 +7,8 @@ def is_image_file(filename):
 
 
 def load_img(filepath):
-    img = Image.open(filepath).convert('RGB')
-    img = img.resize((256, 256), Image.BICUBIC)
+    img = Image.open(filepath).convert('L')
+    img = img.resize((512, 512), Image.BICUBIC)
     return img
 
 
