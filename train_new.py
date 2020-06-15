@@ -328,7 +328,7 @@ class Pix2Pix():
         print("Image saved as {}".format(filename))
         
 
-    def predict(self, images, save_image_dir_path=None, model_ckpt_path=None, is_cv2_image=False):
+    def predict(self, images, save_image_dir_path=None, model_ckpt_path=None, is_cv2_image=False, save_image=True):
         if save_image_dir_path is None:
             save_image_dir_path = self.config.test_image_path
         if model_ckpt_path is None:
@@ -341,13 +341,17 @@ class Pix2Pix():
         self.net_g.eval()
 
         images = self.process_image(images, is_cv2_image)
+        output_images = []
         for image in images:
             input_image = image.unsqueeze(0).to(self.device)
             out = self.net_g(input_image)
             out_img = out.detach().squeeze(0).cpu()
             self.save_image_counter += 1
             file_path = os.path.join(save_image_dir_path, 'predict_image_' + str(self.save_image_counter) +'.jpg')
-            self.save_img(out_img, file_path)
+            output_images.append(out_img)
+            if save_image:
+                self.save_img(out_img, file_path)
+        return output_images
 
 
     def __del__(self):  
