@@ -132,13 +132,17 @@ class Pix2Pix():
         if gen_model_path.endswith('bin'):
             net_g_state_dict = torch.load(gen_model_path)
             self.net_g.load_state_dict(net_g_state_dict)
+            self.net_g.to(self.device)
             if not load_only_gen:
                 net_d_state_dict = torch.load(dis_model_path)
                 self.net_d.load_state_dict(net_d_state_dict)
+                self.net_d.to(self.device)
         else:
             self.net_g = torch.load(gen_model_path)
+            self.net_g.to(self.device)
             if not load_only_gen:
                 self.net_d = torch.load(dis_model_path)
+                self.net_d.to(self.device)
 
         print(f"Loaded Generator:     {gen_model_path}")
         if not load_only_gen:
