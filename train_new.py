@@ -318,14 +318,15 @@ class Pix2Pix():
         return final_images
 
 
-    def save_img(self, image_tensor, filename):
+    def post_process_image(self, image_tensor):
         image_numpy = image_tensor.float().numpy()
         image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
         image_numpy = image_numpy.clip(0, 255)
         image_numpy = image_numpy.astype(np.uint8)
         image_pil = Image.fromarray(image_numpy)
-        image_pil.save(filename)
-        print("Image saved as {}".format(filename))
+        image = np.array(image_pil)
+        return image
+        
         
 
     def predict(self, images, save_image_dir_path=None, model_ckpt_path=None, is_cv2_image=False, save_image=True):
@@ -348,9 +349,11 @@ class Pix2Pix():
             out_img = out.detach().squeeze(0).cpu()
             self.save_image_counter += 1
             file_path = os.path.join(save_image_dir_path, 'predict_image_' + str(self.save_image_counter) +'.jpg')
-            output_images.append(out_img)
+            processed_image = self.post_process_image(out_img)
+            output_images.append(processed_image)
             if save_image:
-                self.save_img(out_img, file_path)
+                cv2.imwrite(file_path, processed_image)
+                print("Image saved as {}".format(file_path))
         return output_images
 
 
