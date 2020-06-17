@@ -44,6 +44,10 @@ class MyConfig():
         self.checkpoint_step = 1 # checkpoint after every N step
         self.checkpoint_path = 'checkpoint/' # checkpoint model
         self.test_image_path = 'result/' # prediction image save path
+        if self.cuda:
+            self.device_name = 'cuda:' + str(self.cuda_n)
+        else:
+            self.device_name = 'cpu'
 
     def display(self):
         print("************************** Given config **************************")
@@ -130,18 +134,18 @@ class Pix2Pix():
         dis_model_path = dis_model_dict[highest_epoch]
 
         if gen_model_path.endswith('bin'):
-            net_g_state_dict = torch.load(gen_model_path)
+            net_g_state_dict = torch.load(gen_model_path, map_location=self.device_name)
             self.net_g.load_state_dict(net_g_state_dict)
             self.net_g.to(self.device)
             if not load_only_gen:
-                net_d_state_dict = torch.load(dis_model_path)
+                net_d_state_dict = torch.load(dis_model_path, map_location=self.device_name)
                 self.net_d.load_state_dict(net_d_state_dict)
                 self.net_d.to(self.device)
         else:
-            self.net_g = torch.load(gen_model_path)
+            self.net_g = torch.load(gen_model_path, map_location=self.device_name)
             self.net_g.to(self.device)
             if not load_only_gen:
-                self.net_d = torch.load(dis_model_path)
+                self.net_d = torch.load(dis_model_path, map_location=self.device_name)
                 self.net_d.to(self.device)
 
         print(f"Loaded Generator:     {gen_model_path}")
