@@ -44,10 +44,6 @@ class MyConfig():
         self.checkpoint_step = 1 # checkpoint after every N step
         self.checkpoint_path = 'checkpoint/' # checkpoint model
         self.test_image_path = 'result/' # prediction image save path
-        if self.cuda:
-            self.device_name = 'cuda:' + str(self.cuda_n)
-        else:
-            self.device_name = 'cpu'
 
     def display(self):
         print("************************** Given config **************************")
@@ -89,6 +85,10 @@ class Pix2Pix():
             torch.cuda.manual_seed(self.config.seed)
 
     def get_models(self, ckpt_path, load_only_gen=False):
+        if self.config.cuda:
+            self.device_name = 'cuda:' + str(self.config.cuda_n)
+        else:
+            self.device_name = 'cpu'
         print("#"*40)
         print("Loading Models")
         models = os.listdir(ckpt_path)
