@@ -16,6 +16,16 @@ import torch.backends.cudnn as cudnn
 from networks import define_G, define_D, GANLoss, get_scheduler, update_learning_rate
 from dataset import DatasetFromImages
 import torchvision.transforms as transforms
+from datetime import datetime
+
+amp, SCALER = None, None
+try:
+    from torch.cuda import amp
+    SCALER = amp.GradScaler()
+except Exception as e:
+    print("Error import AMP for torch: ", e)
+    print("need torch version>=1.6")
+    print("Continuing")
 
 
 class MyConfig():
@@ -44,6 +54,7 @@ class MyConfig():
         self.checkpoint_step = 1 # checkpoint after every N step
         self.checkpoint_path = 'checkpoint/' # checkpoint model
         self.test_image_path = 'result/' # prediction image save path
+        self.use_mp = False  # use Mixed precision
 
     def display(self):
         print("************************** Given config **************************")
@@ -67,7 +78,6 @@ class Pix2Pix():
         self.save_image_counter = 0
         self.config.display()
 
-
     def set_device(self):
         if not torch.cuda.is_available():
             raise Exception("No GPU found, set config.cuda=False to use CPU")
@@ -77,7 +87,6 @@ class Pix2Pix():
         else:
             device = torch.device('cpu')
         return device
-
 
     def set_seed(self):
         torch.manual_seed(self.config.seed)
@@ -154,7 +163,6 @@ class Pix2Pix():
         print("#"*40)
         return True
 
-
     def train_from_images(self, A_images, B_images, A_test_images=None, B_test_images=None, is_cv2_image=False,
                           load_last_model=True):
         """
@@ -197,60 +205,97 @@ class Pix2Pix():
         net_g_scheduler = get_scheduler(optimizer_g, self.config)
         net_d_scheduler = get_scheduler(optimizer_d, self.config)
         total_epoch =  self.config.niter + self.config.niter_decay + 1
+        start = datetime.now()
         for epoch in range(self.config.epoch_count, total_epoch):
             # train
             for iteration, batch in enumerate(training_data_loader, 1):
-                self.net_g.train()
-                self.net_d.train()
                 # forward
                 real_a, real_b = batch[0].to(self.device), batch[1].to(self.device)
 
-                fake_b = self.net_g(real_a)
-                ######################
-                # (1) Update D network
-                ######################
-                optimizer_d.zero_grad()
+                # Train with Mixed precision
+                if self.config.use_mp:
+                    with amp.autocast():
+                        fake_b = self.net_g(real_a)
+                    ######################
+                    # (1) Update D network
+                    ######################
+                    optimizer_d.zero_grad()
 
-                # train with fake
-                fake_ab = torch.cat((real_a, fake_b), 1)
-                pred_fake = self.net_d.forward(fake_ab.detach())
-                loss_d_fake = criterionGAN(pred_fake, False)
+                    # train with fake
+                    fake_ab = torch.cat((real_a, fake_b), 1)
+                    with amp.autocast():
+                        pred_fake = self.net_d.forward(fake_ab.detach())
+                        loss_d_fake = criterionGAN(pred_fake, False)
 
-                # train with real
-                real_ab = torch.cat((real_a, real_b), 1)
-                pred_real = self.net_d.forward(real_ab)
-                loss_d_real = criterionGAN(pred_real, True)
+                    # train with real
+                    real_ab = torch.cat((real_a, real_b), 1)
+                    with amp.autocast():
+                        pred_real = self.net_d.forward(real_ab)
+                        loss_d_real = criterionGAN(pred_real, True)
 
-                # Combined D loss
-                loss_d = (loss_d_fake + loss_d_real) * 0.5
+                        # Combined D loss
+                        loss_d = (loss_d_fake + loss_d_real) * 0.5
 
-                loss_d.backward()
+                    SCALER.scale(loss_d).backward()
+                    SCALER.step(optimizer_d)
+                    SCALER.update()
 
-                optimizer_d.step()
+                    ######################
+                    # (2) Update G network
+                    ######################
 
-                ######################
-                # (2) Update G network
-                ######################
+                    optimizer_g.zero_grad()
 
-                optimizer_g.zero_grad()
+                    # First, G(A) should fake the discriminator
+                    fake_ab = torch.cat((real_a, fake_b), 1)
+                    with amp.autocast():
+                        pred_fake = self.net_d.forward(fake_ab)
+                        loss_g_gan = criterionGAN(pred_fake, True)
+                        # Second, G(A) = B
+                        loss_g_l1 = criterionL1(fake_b, real_b) * self.config.lamb
+                        loss_g = loss_g_gan + loss_g_l1
 
-                # First, G(A) should fake the discriminator
-                fake_ab = torch.cat((real_a, fake_b), 1)
-                pred_fake = self.net_d.forward(fake_ab)
-                loss_g_gan = criterionGAN(pred_fake, True)
+                    SCALER.scale(loss_g).backward()
+                    SCALER.step(optimizer_g)
+                    SCALER.update()
 
-                # Second, G(A) = B
-                loss_g_l1 = criterionL1(fake_b, real_b) * self.config.lamb
-
-                loss_g = loss_g_gan + loss_g_l1
-
-                loss_g.backward()
-
-                optimizer_g.step()
+                else:
+                    fake_b = self.net_g(real_a)
+                    ######################
+                    # (1) Update D network
+                    ######################
+                    optimizer_d.zero_grad()
+                    # train with fake
+                    fake_ab = torch.cat((real_a, fake_b), 1)
+                    pred_fake = self.net_d.forward(fake_ab.detach())
+                    loss_d_fake = criterionGAN(pred_fake, False)
+                    # train with real
+                    real_ab = torch.cat((real_a, real_b), 1)
+                    pred_real = self.net_d.forward(real_ab)
+                    loss_d_real = criterionGAN(pred_real, True)
+                    # Combined D loss
+                    loss_d = (loss_d_fake + loss_d_real) * 0.5
+                    loss_d.backward()
+                    optimizer_d.step()
+                    ######################
+                    # (2) Update G network
+                    ######################
+                    optimizer_g.zero_grad()
+                    # First, G(A) should fake the discriminator
+                    fake_ab = torch.cat((real_a, fake_b), 1)
+                    pred_fake = self.net_d.forward(fake_ab)
+                    loss_g_gan = criterionGAN(pred_fake, True)
+                    # Second, G(A) = B
+                    loss_g_l1 = criterionL1(fake_b, real_b) * self.config.lamb
+                    loss_g = loss_g_gan + loss_g_l1
+                    loss_g.backward()
+                    optimizer_g.step()
 
                 if iteration % 25 == 0:
-                    print("===> Epoch[{}/{}] Steps:({}/{}): Loss_D: {:.4f} Loss_G: {:.4f}".format(
-                        epoch, total_epoch, iteration, len(training_data_loader), loss_d.item(), loss_g.item()))
+                    time_taken = (datetime.now() - start).total_seconds()
+                    print("===> Epoch[{}/{}] Steps:({}/{}): Loss_D: {:.4f} Loss_G: {:.4f} Time: {}".format(
+                        epoch, total_epoch, iteration, len(training_data_loader), loss_d.item(), loss_g.item(), time_taken))
+                    start = datetime.now()
 
             update_learning_rate(net_g_scheduler, optimizer_g)
             update_learning_rate(net_d_scheduler, optimizer_d)
@@ -295,10 +340,10 @@ class Pix2Pix():
                         image = random.choice(A_images)
 
                 self.predict([image], is_cv2_image=True)
-
+                self.net_g.train()
+                self.net_d.train()
         
         print("Completed")
-
 
     def process_image(self, images, is_cv2_image):
         final_images = []
@@ -321,7 +366,6 @@ class Pix2Pix():
 
         return final_images
 
-
     def post_process_image(self, image_tensor):
         image_numpy = image_tensor.float().numpy()
         image_numpy = (np.transpose(image_numpy, (1, 2, 0)) + 1) / 2.0 * 255.0
@@ -330,8 +374,6 @@ class Pix2Pix():
         image_pil = Image.fromarray(image_numpy)
         image = np.array(image_pil)
         return image
-        
-        
 
     def predict(self, images, save_image_dir_path=None, model_ckpt_path=None, is_cv2_image=False, save_image=True):
         if save_image_dir_path is None:
@@ -360,17 +402,16 @@ class Pix2Pix():
                 print("Image saved as {}".format(file_path))
         return output_images
 
-
     def __del__(self):  
         print("Destructor called, object deleted.")
-
 
 
 if __name__ == '__main__':
     from PIL import Image
     import cv2
-    train_a = 'mask_sample/a'
-    train_b = 'mask_sample/b'
+
+    train_a = 'dataset/facades/train/a'
+    train_b = 'dataset/facades/train/b'
     filenames = os.listdir(train_a)
 
     train_a_images = []
@@ -388,15 +429,15 @@ if __name__ == '__main__':
 
     config = MyConfig()
     config.input_shape = 512
-    config.cuda_n = 1
+    config.cuda_n = 0
     config.batch_size = 1
     config.input_nc = 1
-    config.checkpoint_path = 'mask_ckpt/'
-    config.test_image_path = 'result/'
+    config.checkpoint_path = 'myckpt/'
+    config.test_image_path = 'myckpt/'
+    config.use_mp = True
     print(train_b_images[0].shape)
 
     pix2pix = Pix2Pix(config)
-
 
     pix2pix.train_from_images(train_a_images, train_b_images, is_cv2_image=True)
     # pix2pix.predict(train_b_images, is_cv2_image=True)
