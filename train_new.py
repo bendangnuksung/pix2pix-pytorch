@@ -80,7 +80,7 @@ class Pix2Pix():
         self.config.display()
 
     def set_device(self):
-        if not torch.cuda.is_available():
+        if not torch.cuda.is_available() and self.config.cuda:
             raise Exception("No GPU found, set config.cuda=False to use CPU")
 
         if self.config.cuda:
