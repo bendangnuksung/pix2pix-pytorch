@@ -55,6 +55,7 @@ class MyConfig():
         self.checkpoint_path = 'checkpoint/' # checkpoint model
         self.test_image_path = 'result/' # prediction image save path
         self.use_mp = False  # use Mixed precision
+        self.g_nblocks = 12
 
     def display(self):
         print("************************** Given config **************************")
@@ -191,7 +192,7 @@ class Pix2Pix():
             testing_data_loader = DataLoader(dataset=test_set, num_workers=self.config.threads,
                                              batch_size=self.config.test_batch_size, shuffle=False)
 
-        self.net_g = define_G(self.config.input_nc, self.config.output_nc, self.config.ngf, 'batch', False, 'normal', 0.02, gpu_id=self.device)
+        self.net_g = define_G(self.config.input_nc, self.config.output_nc, self.config.ngf, 'batch', False, 'normal', 0.02, gpu_id=self.device, n_blocks=self.config.g_nblocks)
         self.net_d = define_D(self.config.input_nc + self.config.output_nc, self.config.ndf, 'basic', gpu_id=self.device)
         if load_last_model:
             self.get_models(self.model_ckpt_path)
