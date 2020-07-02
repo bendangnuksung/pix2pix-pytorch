@@ -162,7 +162,7 @@ class Pix2Pix():
 
         highest_epoch = sorted(gen_model_dict.keys())[-1]
 
-        self.config.epoch_count = highest_epoch
+        self.config.epoch_count = highest_epoch + 1
 
 
         gen_model_path = gen_model_dict[highest_epoch]
