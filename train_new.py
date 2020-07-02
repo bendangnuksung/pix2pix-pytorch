@@ -12,6 +12,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.backends.cudnn as cudnn
+import logging
+
 
 from networks import define_G, define_D, GANLoss, get_scheduler, update_learning_rate
 from dataset import DatasetFromImages
@@ -26,6 +28,25 @@ except Exception as e:
     print("Error import AMP for torch: ", e)
     print("need torch version>=1.6")
     print("Continuing")
+
+
+LOG_PATH = 'PIX2PIX_LOG.txt'
+formatter = logging.Formatter('%(asctime)s | %(message)s', '%Y-%m-%d %H:%M:%S')
+
+
+def setup_logger(name, log_file, level=logging.INFO):
+    """Function setup as many loggers as you want"""
+    handler = logging.FileHandler(log_file)
+    handler.setFormatter(formatter)
+
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    logger.addHandler(handler)
+
+    return logger
+
+
+command_logger = setup_logger('command_logger', LOG_PATH)
 
 
 class MyConfig():
@@ -81,6 +102,7 @@ class Pix2Pix():
 
     def set_device(self):
         if not torch.cuda.is_available() and self.config.cuda:
+            command_logger.info("No GPU found, set config.cuda=False to use CPU")
             raise Exception("No GPU found, set config.cuda=False to use CPU")
 
         if self.config.cuda:
@@ -103,6 +125,7 @@ class Pix2Pix():
         print("Loading Models")
         models = os.listdir(ckpt_path)
         if len(models) == 0:
+            command_logger.info("No models found in Checkpoint path:")
             print("No models found in Checkpoint path:")
             return False
 
@@ -128,10 +151,12 @@ class Pix2Pix():
                 print('Not a model file: ', model_name)
 
         if gen_model_dict == {}:
+            command_logger.info("No Generator model found")
             print("No Generator model found")
             return False
 
         if dis_model_dict == {}:
+            command_logger.info("No Discriminator model found")
             print("No Discriminator model found")
             return False
 
@@ -158,8 +183,10 @@ class Pix2Pix():
                 self.net_d = torch.load(dis_model_path, map_location=self.device_name)
                 self.net_d.to(self.device)
 
+        command_logger.info(f"Loaded Generator:     {gen_model_path}")
         print(f"Loaded Generator:     {gen_model_path}")
         if not load_only_gen:
+            command_logger.info(f"Loaded Discriminator: {dis_model_path}")
             print(f"Loaded Discriminator: {dis_model_path}")
         print("#"*40)
         return True
@@ -175,7 +202,7 @@ class Pix2Pix():
         :param self.model_ckpt_path: Checkpoint model path to be save
         :param config:  Hyperparameter from config
         """
-        
+        command_logger.info("STARTED")
         self.device = self.set_device()
         self.set_seed()
         self.model_ckpt_path = self.config.checkpoint_path
@@ -296,6 +323,8 @@ class Pix2Pix():
                     time_taken = (datetime.now() - start).total_seconds()
                     print("===> Epoch[{}/{}] Steps:({}/{}): Loss_D: {:.4f} Loss_G: {:.4f} Time: {}".format(
                         epoch, total_epoch, iteration, len(training_data_loader), loss_d.item(), loss_g.item(), time_taken))
+                    command_logger.info("=> Epoch[{}/{}] Steps:({}/{}): Loss_D: {:.4f} Loss_G: {:.4f} Time: {}".format(
+                        epoch, total_epoch, iteration, len(training_data_loader), loss_d.item(), loss_g.item(), time_taken))
                     start = datetime.now()
 
             update_learning_rate(net_g_scheduler, optimizer_g)
@@ -312,6 +341,7 @@ class Pix2Pix():
                     psnr = 10 * log10(1 / mse.item())
                     avg_psnr += psnr
                 print("===> Avg. PSNR: {:.4f} dB".format(avg_psnr / len(testing_data_loader)))
+                command_logger.info("===> Avg. PSNR: {:.4f} dB".format(avg_psnr / len(testing_data_loader)))
 
             # checkpoint
             if epoch % self.config.checkpoint_step == 0:
@@ -326,6 +356,7 @@ class Pix2Pix():
                 torch.save(self.net_g, net_g_model_out_path)
                 torch.save(self.net_d, net_d_model_out_path)
                 print("Checkpoint saved to -- ", self.model_ckpt_path)
+                command_logger.info(f"Checkpoint saved to -- {self.model_ckpt_path}")
 
                 # prediction
                 if self.config.direction == 'b2a':
@@ -345,6 +376,7 @@ class Pix2Pix():
                 self.net_d.train()
         
         print("Completed")
+        command_logger.info(f"Completed")
 
     def process_image(self, images, is_cv2_image):
         final_images = []
